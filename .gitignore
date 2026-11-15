@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+*.hashes
+rockyou.txt
+wordlists/
