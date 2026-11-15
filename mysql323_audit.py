@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import json
+import os
 import sys
 import time
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
 MASK = 0xFFFFFFFF
+
+SECLISTS_API = ("https://api.github.com/repos/danielmiessler/SecLists/"
+                "contents/Passwords/Leaked-Databases")
 
 
 def mysql323(password):
@@ -94,6 +100,32 @@ def iter_wordlist(path):
                 yield line.rstrip("\r\n")
 
 
+def fetch_seclists(cache_dir):
+    os.makedirs(cache_dir, exist_ok=True)
+    req = urllib.request.Request(SECLISTS_API,
+        headers={"User-Agent": "mysql323-audit"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        items = json.load(r)
+    paths = []
+    for it in items:
+        name = it.get("name", "")
+        if it.get("type") != "file" or not name.endswith(".txt"):
+            continue
+        dest = os.path.join(cache_dir, name)
+        if not os.path.exists(dest):
+            sys.stderr.write("fetching %s ... " % name)
+            sys.stderr.flush()
+            urllib.request.urlretrieve(it["download_url"], dest)
+            sys.stderr.write("done\n")
+        paths.append(dest)
+    return paths
+
+
+def iter_sources(sources):
+    for s in sources:
+        yield from iter_wordlist(s)
+
+
 def count_lines(path):
     n = 0
     with open(path, "rb") as fh:
@@ -124,13 +156,18 @@ def run(args):
         print("hashes file not found: %s" % path, file=sys.stderr)
         return 2
 
-    if args.wordlist == "-" and sys.stdin.isatty():
-        print("no wordlist given. pass --wordlist FILE or pipe one into stdin",
+    sources = list(args.wordlist) if args.wordlist else []
+    if args.seclists:
+        sources += fetch_seclists(args.cache_dir)
+    if not sources:
+        sources = ["-"]
+    if sources == ["-"] and sys.stdin.isatty():
+        print("no wordlist given. pass --wordlist FILE, --seclists, or pipe into stdin",
             file=sys.stderr)
         return 2
 
     table = load_hashes(path, args.id_col, args.hash_col,
-                        args.delimiter, args.has_header)
+        args.delimiter, args.has_header)
     total = sum(len(v) for v in table.values())
     if not total:
         print("no hashes loaded (check --hash-col / --delimiter)", file=sys.stderr)
@@ -141,13 +178,13 @@ def run(args):
     remaining = set(table)
 
     show = sys.stderr.isatty()
-    wl_total = count_lines(args.wordlist) if show and args.wordlist != "-" else 0
+    wl_total = sum(count_lines(s) for s in sources if s != "-") if show else 0
 
     start = time.time()
     tried = 0
     done = 0
     last = 0.0
-    for raw in iter_wordlist(args.wordlist):
+    for raw in iter_sources(sources):
         if not remaining:
             break
         done += 1
@@ -206,7 +243,9 @@ def main(argv=None):
         prog="mysql323-audit",
         description="Offline dictionary auditor for MySQL323 / OLD_PASSWORD() hashes.")
     p.add_argument("--hashes")
-    p.add_argument("--wordlist", default="-")
+    p.add_argument("--wordlist", action="append")
+    p.add_argument("--seclists", action="store_true")
+    p.add_argument("--cache-dir", default="wordlists/seclists")
     p.add_argument("--id-col", type=int, default=0)
     p.add_argument("--hash-col", type=int, default=1)
     p.add_argument("--delimiter", default=",")
