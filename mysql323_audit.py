@@ -94,6 +94,30 @@ def iter_wordlist(path):
                 yield line.rstrip("\r\n")
 
 
+def count_lines(path):
+    n = 0
+    with open(path, "rb") as fh:
+        for _ in fh:
+            n += 1
+    return n
+
+
+def progress(done, total, cracked, naccts, start):
+    el = time.time() - start
+    rate = done / el if el > 0 else 0
+    if total:
+        pct = 100.0 * done / total
+        filled = int(pct // 5)
+        bar = "#" * filled + "-" * (20 - filled)
+        eta = (total - done) / rate if rate > 0 else 0
+        sys.stderr.write("\r[%s] %5.1f%%  %d/%d  %.0f/s  cracked %d/%d  eta %ds   "
+            % (bar, pct, done, total, rate, cracked, naccts, eta))
+    else:
+        sys.stderr.write("\r%d words  %.0f/s  cracked %d/%d   "
+            % (done, rate, cracked, naccts))
+    sys.stderr.flush()
+
+
 def run(args):
     path = Path(args.hashes)
     if not path.exists():
@@ -116,11 +140,17 @@ def run(args):
     cracked = {}
     remaining = set(table)
 
+    show = sys.stderr.isatty()
+    wl_total = count_lines(args.wordlist) if show and args.wordlist != "-" else 0
+
     start = time.time()
     tried = 0
+    done = 0
+    last = 0.0
     for raw in iter_wordlist(args.wordlist):
         if not remaining:
             break
+        done += 1
         for cand in mutations(raw, args.mutations):
             tried += 1
             h = mysql323(cand)
@@ -129,6 +159,12 @@ def run(args):
                 remaining.discard(h)
                 if not remaining:
                     break
+        if show and time.time() - last > 0.2:
+            last = time.time()
+            progress(done, wl_total, len(cracked), len(table), start)
+    if show:
+        progress(done, wl_total, len(cracked), len(table), start)
+        sys.stderr.write("\n")
     elapsed = max(time.time() - start, 1e-9)
 
     rows = []
