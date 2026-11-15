@@ -100,6 +100,11 @@ def run(args):
         print("hashes file not found: %s" % path, file=sys.stderr)
         return 2
 
+    if args.wordlist == "-" and sys.stdin.isatty():
+        print("no wordlist given. pass --wordlist FILE or pipe one into stdin",
+            file=sys.stderr)
+        return 2
+
     table = load_hashes(path, args.id_col, args.hash_col,
                         args.delimiter, args.has_header)
     total = sum(len(v) for v in table.values())
